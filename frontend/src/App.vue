@@ -1,0 +1,1250 @@
+<script setup lang="ts">
+import { ref } from "vue";
+import {
+  SecLabAlert,
+  SecLabButton,
+  SecLabEmpty,
+  SecLabIcon,
+  SecLabSelect,
+  SecLabTabs,
+  SecLabTag,
+  SecLabModal,
+} from "@seclab-dev/vue";
+import HostGridPanel from "@/components/HostGridPanel.vue";
+import { useHostScanner } from "@/composables/useHostScanner";
+import { t } from "@/i18n";
+
+const {
+  networkInfo,
+  isFetchingEnv,
+  cidr,
+  scanType,
+  scanTypeOptions,
+  ports,
+  timeout,
+  maxConcurrency,
+  scanProgress,
+  scannedHosts,
+  totalHosts,
+  currentHost,
+  isScanning,
+  isCanceling,
+  scanDuration,
+  currentResults,
+  selectedTask,
+  tasksList,
+  activeTab,
+  scanTabs,
+  ipList,
+  ipStates,
+  configError,
+  stats,
+  totalTime,
+  startScan,
+  cancelScan,
+  deleteTask,
+  highlightHost,
+  handleHistoryItemClick,
+} = useHostScanner();
+
+const activeWorkspacePanel = ref<"hosts" | "report">("hosts");
+
+function toggleWorkspacePanel(panel: "hosts" | "report") {
+  activeWorkspacePanel.value = panel;
+}
+
+const deleteTaskId = ref<string | null>(null);
+const deleteModalVisible = ref(false);
+
+function showDeleteConfirm(taskId: string, event: Event) {
+  event.stopPropagation();
+  deleteTaskId.value = taskId;
+  deleteModalVisible.value = true;
+}
+
+async function handleConfirmDelete() {
+  if (!deleteTaskId.value) return;
+  try {
+    await deleteTask(deleteTaskId.value);
+  } catch (error: unknown) {
+    window.alert(
+      error instanceof Error ? error.message : t.value.deleteTaskFailed,
+    );
+  } finally {
+    deleteModalVisible.value = false;
+    deleteTaskId.value = null;
+  }
+}
+
+function handleCancelDelete() {
+  deleteModalVisible.value = false;
+  deleteTaskId.value = null;
+}
+
+function emptyPortNotice(host: { detail: string }) {
+  if (
+    host.detail.includes("TCP 连接被拒绝") ||
+    host.detail.toLowerCase().includes("refused") ||
+    host.detail.toLowerCase().includes("rejected")
+  ) {
+    return t.value.hostRejectedNotice;
+  }
+  return t.value.hostIcmpOnlyNotice;
+}
+</script>
+
+<template>
+  <div class="host-scanner" data-page="host-scanner">
+    <div class="app-header" data-ui="toolbar">
+      <div class="header-logo">
+        <div class="header-mark" :class="{ 'is-active': isScanning }">
+          <SecLabIcon name="host-scanning" :size="28" />
+        </div>
+        <div class="logo-title">
+          <h1>{{ t.title }}</h1>
+          <p>{{ t.subtitle }}</p>
+        </div>
+      </div>
+
+      <div class="env-badges" v-if="networkInfo">
+        <SecLabTag type="default">
+          <span class="badge-label">{{ t.network }}</span>
+          <span class="badge-val">{{ networkInfo.networkMode }}</span>
+        </SecLabTag>
+        <SecLabTag :type="networkInfo.capNetRaw ? 'success' : 'danger'">
+          <span class="badge-label">ICMP</span>
+          <span class="badge-val">{{
+            networkInfo.capNetRaw ? t.available : t.limited
+          }}</span>
+        </SecLabTag>
+        <SecLabTag type="primary">
+          <span class="badge-label">{{ t.containerIp }}</span>
+          <span class="badge-val">{{ networkInfo.containerIp }}</span>
+        </SecLabTag>
+      </div>
+      <div v-else-if="isFetchingEnv" class="env-loading">
+        {{ t.fetchingEnv }}
+      </div>
+    </div>
+
+    <div class="app-body" data-slot="content">
+      <div class="body-left" data-ui="scan-control">
+        <!-- 配置面板 -->
+        <div class="panel config-panel">
+          <div class="panel-header">
+            <SecLabIcon name="settings" :size="16" />
+            <span>{{ t.scanConfig }}</span>
+          </div>
+          <div class="panel-body">
+            <div class="form-group">
+              <label>{{ t.targetCidr }}</label>
+              <input
+                v-model="cidr"
+                type="text"
+                :placeholder="t.cidrPlaceholder"
+                :disabled="isScanning"
+              />
+            </div>
+
+            <div class="form-row">
+              <div class="form-group flex-1">
+                <label>{{ t.scanMode }}</label>
+                <SecLabSelect
+                  v-model="scanType"
+                  :options="scanTypeOptions"
+                  :disabled="isScanning"
+                />
+              </div>
+
+              <div class="form-group flex-1">
+                <label>{{ t.timeoutSec }}</label>
+                <input
+                  v-model.number="timeout"
+                  type="number"
+                  step="0.1"
+                  min="0.1"
+                  max="5.0"
+                  :disabled="isScanning"
+                />
+              </div>
+            </div>
+
+            <div class="form-group" v-if="scanType === 'tcp'">
+              <label>{{ t.portsLabel }}</label>
+              <input
+                v-model="ports"
+                type="text"
+                :placeholder="t.portsPlaceholder"
+                :disabled="isScanning"
+              />
+            </div>
+
+            <div class="form-group">
+              <label>{{ t.concurrencyLimit }}</label>
+              <input
+                v-model.number="maxConcurrency"
+                type="number"
+                min="1"
+                max="256"
+                :disabled="isScanning"
+              />
+            </div>
+
+            <SecLabAlert v-if="configError" type="error" show-icon>
+              {{ configError }}
+            </SecLabAlert>
+
+            <div class="action-buttons">
+              <SecLabButton
+                class="scan-action"
+                type="primary"
+                size="large"
+                :loading="isScanning"
+                :disabled="isScanning"
+                @click="startScan"
+              >
+                <SecLabIcon v-if="!isScanning" name="play" :size="16" />
+                {{ isScanning ? t.scanning : t.startScan }}
+              </SecLabButton>
+              <SecLabButton
+                v-if="isScanning"
+                class="scan-action"
+                type="danger"
+                size="large"
+                :loading="isCanceling"
+                :disabled="isCanceling"
+                @click="cancelScan"
+              >
+                <SecLabIcon v-if="!isCanceling" name="stop" :size="16" />
+                {{ isCanceling ? t.cancelingScan : t.cancelScan }}
+              </SecLabButton>
+            </div>
+          </div>
+        </div>
+
+        <!-- 实时扫描看板/指标 -->
+        <div
+          class="panel stats-panel"
+          v-if="isScanning || stats.totalAlive > 0"
+        >
+          <div class="panel-header">
+            <SecLabIcon name="chart" :size="16" />
+            <span>{{ t.scanOverview }}</span>
+          </div>
+          <div class="panel-body">
+            <!-- 实时进度条 -->
+            <div class="progress-bar-container" v-if="isScanning">
+              <div class="progress-bar-header">
+                <span>{{ t.executing }}</span>
+                <span>{{ scanProgress }}%</span>
+              </div>
+              <div class="progress-bar-track">
+                <div
+                  class="progress-bar-fill"
+                  :style="{ width: scanProgress + '%' }"
+                ></div>
+              </div>
+              <div class="progress-meta">
+                <span>{{ t.progress(scannedHosts, totalHosts) }}</span>
+                <span>{{ t.currentIp(currentHost) }}</span>
+              </div>
+            </div>
+
+            <!-- 数据快照指标 -->
+            <div class="stats-grid">
+              <div class="stat-card">
+                <span class="stat-label">{{ t.aliveHosts }}</span>
+                <span class="stat-val text-success">{{
+                  stats.totalAlive
+                }}</span>
+              </div>
+              <div class="stat-card">
+                <span class="stat-label">{{ t.openPortServices }}</span>
+                <span class="stat-val text-info">{{ stats.withPorts }}</span>
+              </div>
+              <div class="stat-card" v-if="isScanning">
+                <span class="stat-label">{{ t.elapsedTime }}</span>
+                <span class="stat-val font-mono">{{ scanDuration }}s</span>
+              </div>
+              <div class="stat-card" v-else-if="selectedTask">
+                <span class="stat-label">{{ t.totalTime }}</span>
+                <span class="stat-val font-mono">{{ totalTime }}s</span>
+              </div>
+            </div>
+
+            <!-- 端口分布 -->
+            <div
+              class="ports-chart-container"
+              v-if="stats.sortedPorts.length > 0"
+            >
+              <label>{{ t.popularPorts }}</label>
+              <div class="port-bar-list">
+                <div
+                  v-for="item in stats.sortedPorts"
+                  :key="item.port"
+                  class="port-bar-item"
+                >
+                  <span class="port-num font-mono">PORT {{ item.port }}</span>
+                  <div class="port-track">
+                    <div
+                      class="port-fill"
+                      :style="{
+                        width: (item.count / stats.totalAlive) * 100 + '%',
+                      }"
+                    ></div>
+                  </div>
+                  <span class="port-count font-mono">{{
+                    t.hostsCount(item.count)
+                  }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="body-right" data-ui="scan-workspace">
+        <SecLabTabs v-model="activeTab" :tabs="scanTabs" />
+
+        <div class="tab-content" v-if="activeTab === 'realtime'">
+          <HostGridPanel
+            :ip-list="ipList"
+            :ip-states="ipStates"
+            :results="currentResults"
+            :interactive="isScanning || Boolean(selectedTask)"
+            :collapsed="activeWorkspacePanel !== 'hosts'"
+            @select="highlightHost"
+            @toggle="toggleWorkspacePanel('hosts')"
+          />
+
+          <!-- 报告结果指纹列表 -->
+          <div
+            class="panel results-panel"
+            :class="{ collapsed: activeWorkspacePanel !== 'report' }"
+          >
+            <button
+              type="button"
+              class="panel-header panel-toggle"
+              :aria-expanded="activeWorkspacePanel === 'report'"
+              @click="toggleWorkspacePanel('report')"
+            >
+              <SecLabIcon
+                class="panel-chevron"
+                name="chevron-down"
+                :size="16"
+              />
+              <SecLabIcon name="server" :size="16" />
+              <span>{{ t.assetReport }}</span>
+              <span class="panel-count">{{
+                t.itemsCount(currentResults.length)
+              }}</span>
+            </button>
+            <div
+              v-if="activeWorkspacePanel === 'report'"
+              class="panel-body report-scroll"
+            >
+              <SecLabEmpty
+                v-if="currentResults.length === 0"
+                icon="network"
+                :description="t.realtimeReportDesc"
+              />
+
+              <div class="results-list" v-else>
+                <div
+                  v-for="host in currentResults"
+                  :key="host.host"
+                  :id="'host-' + host.host"
+                  class="host-card"
+                  :class="{ expanded: host.expanded }"
+                  @click="host.expanded = !host.expanded"
+                >
+                  <div class="card-summary">
+                    <div class="summary-left">
+                      <span class="icon-chevron"></span>
+                      <span class="host-ip font-mono">{{ host.host }}</span>
+                      <span
+                        class="badge-ports"
+                        v-if="host.parsedPorts && host.parsedPorts.length > 0"
+                      >
+                        {{ t.openPortsCount(host.parsedPorts.length) }}
+                      </span>
+                    </div>
+                    <div class="summary-right font-mono">
+                      {{ host.detail }}
+                    </div>
+                  </div>
+
+                  <!-- 展开显示详情 -->
+                  <div class="card-detail" v-if="host.expanded">
+                    <div class="detail-section">
+                      <div class="section-title">{{ t.portDetailTitle }}</div>
+                      <div
+                        class="ports-table-wrapper"
+                        v-if="host.parsedPorts && host.parsedPorts.length > 0"
+                      >
+                        <table class="ports-table">
+                          <thead>
+                            <tr>
+                              <th>{{ t.thPort }}</th>
+                              <th>{{ t.thStatus }}</th>
+                              <th>{{ t.thBanner }}</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            <tr v-for="p in host.parsedPorts" :key="p.port">
+                              <td class="font-mono text-primary">
+                                PORT {{ p.port }}
+                              </td>
+                              <td>
+                                <span class="badge-status open">OPEN</span>
+                              </td>
+                              <td>
+                                <code class="banner-code font-mono">{{
+                                  p.banner || t.establishedNoBanner
+                                }}</code>
+                              </td>
+                            </tr>
+                          </tbody>
+                        </table>
+                      </div>
+                      <div class="no-ports-notice" v-else>
+                        {{ emptyPortNotice(host) }}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 历史报告 TAB -->
+        <div class="tab-content" v-else>
+          <div class="panel history-panel">
+            <div class="panel-header">
+              <SecLabIcon name="log" :size="16" />
+              <span>{{ t.historyReports }}</span>
+            </div>
+            <div class="panel-body report-scroll">
+              <SecLabEmpty
+                v-if="tasksList.length === 0"
+                icon="log"
+                :description="t.historyReportDesc"
+              />
+
+              <div class="history-list" v-else>
+                <div
+                  v-for="task in tasksList"
+                  :key="task.id"
+                  class="history-item"
+                  @click="handleHistoryItemClick(task.id)"
+                >
+                  <div class="history-left">
+                    <div class="history-cidr font-mono">{{ task.cidr }}</div>
+                    <div class="history-meta">
+                      <span>{{
+                        t.scanMethod(
+                          task.scan_type === "tcp"
+                            ? t.tcpModeLabel
+                            : t.icmpModeLabel,
+                        )
+                      }}</span>
+                      <span>{{ t.scanPorts(task.ports) }}</span>
+                      <span>{{
+                        t.scanTime(new Date(task.created_at).toLocaleString())
+                      }}</span>
+                    </div>
+                  </div>
+
+                  <div class="history-right">
+                    <span
+                      class="history-stat"
+                      v-html="t.foundAliveHosts(task.scanned_hosts)"
+                    ></span>
+                    <SecLabButton
+                      type="danger"
+                      size="small"
+                      @click="showDeleteConfirm(task.id, $event)"
+                    >
+                      <SecLabIcon name="trash" :size="14" />
+                      {{ t.delete }}
+                    </SecLabButton>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <!-- 删除确认弹窗 -->
+    <SecLabModal
+      :visible="deleteModalVisible"
+      :title="t.confirmDelete"
+      :message="t.confirmDeleteMessage"
+      :confirm-text="t.confirmDelete"
+      :cancel-text="t.cancel"
+      type="danger"
+      @confirm="handleConfirmDelete"
+      @cancel="handleCancelDelete"
+    />
+  </div>
+</template>
+
+<style>
+@import "@seclab-dev/tokens";
+@import "@seclab-dev/vue/style.css";
+
+/* CSS Reset and Global Integration */
+html,
+body,
+#app {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  margin: 0;
+  overflow: hidden;
+}
+
+.host-scanner {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background-color: var(--sdl-bg-canvas);
+  color: var(--sdl-text-primary);
+  font-family: var(--sdl-font-family);
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+.host-scanner * {
+  box-sizing: border-box;
+}
+
+/* 顶部栏 */
+.app-header {
+  height: 60px;
+  min-height: 60px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 var(--sdl-space-5);
+  background-color: var(--sdl-bg-base);
+  border-bottom: 1px solid var(--sdl-border-subtle);
+}
+
+.header-logo {
+  display: flex;
+  align-items: center;
+  gap: var(--sdl-space-3);
+}
+
+.header-mark {
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  border: 1px solid var(--sdl-border-brand);
+  border-radius: var(--sdl-radius-md);
+  background: var(--sdl-bg-active);
+  color: var(--sdl-primary);
+}
+
+.header-mark.is-active {
+  color: var(--sdl-info);
+}
+
+.header-mark.is-active .sl-icon {
+  animation: header-scan-pulse 1s ease-in-out infinite alternate;
+}
+
+@keyframes header-scan-pulse {
+  from {
+    opacity: 0.55;
+    transform: scale(0.9);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.logo-title h1 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.logo-title p {
+  margin: 2px 0 0 0;
+  font-size: 11px;
+  color: var(--sdl-text-muted);
+}
+
+.env-badges {
+  display: flex;
+  align-items: center;
+  gap: var(--sdl-space-2);
+}
+
+.env-badges .sl-tag {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.badge-label {
+  font-weight: 600;
+  opacity: 0.75;
+}
+
+.badge-val {
+  font-weight: 700;
+  font-family: var(--sdl-font-mono);
+}
+
+.env-loading {
+  color: var(--sdl-text-muted);
+  font-size: var(--sdl-font-caption);
+}
+
+.text-success {
+  color: var(--sdl-success);
+}
+.text-danger {
+  color: var(--sdl-danger);
+}
+.text-info {
+  color: var(--sdl-info);
+}
+
+/* 主体区域 */
+.app-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+
+.body-left {
+  width: 380px;
+  min-width: 380px;
+  min-height: 0;
+  border-right: 1px solid var(--sdl-border-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sdl-space-4);
+  padding: var(--sdl-space-4);
+  overflow: hidden;
+}
+
+.body-right {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: var(--sdl-space-4);
+  overflow: hidden;
+  gap: var(--sdl-space-4);
+}
+
+/* 面板通用组件 */
+.panel {
+  min-height: 0;
+  background-color: var(--sdl-bg-card);
+  border: 1px solid var(--sdl-border-default);
+  border-radius: var(--sdl-radius-md);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: var(--sdl-shadow-panel);
+}
+
+.panel-header {
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  gap: var(--sdl-space-2);
+  padding: var(--sdl-space-3) var(--sdl-space-4);
+  border-bottom: 1px solid var(--sdl-border-subtle);
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--sdl-text-primary);
+  background-color: var(--sdl-bg-panel);
+}
+
+.panel-toggle {
+  width: 100%;
+  border-top: 0;
+  border-left: 0;
+  border-right: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.panel-toggle > :not(.panel-chevron):first-of-type {
+  color: var(--sdl-primary);
+}
+
+.panel-chevron {
+  color: var(--sdl-text-muted);
+  transition: transform 0.18s ease;
+}
+
+.panel-toggle[aria-expanded="false"] .panel-chevron {
+  transform: rotate(-90deg);
+}
+
+.panel-count {
+  margin-left: auto;
+  padding: 2px 6px;
+  border-radius: var(--sdl-radius-sm);
+  color: var(--sdl-text-muted);
+  background: var(--sdl-bg-muted);
+  font-family: var(--sdl-font-mono);
+  font-size: var(--sdl-font-caption);
+  font-weight: 500;
+}
+
+.panel-header > :not(.panel-chevron):first-of-type {
+  color: var(--sdl-primary);
+}
+
+.panel-body {
+  min-height: 0;
+  padding: var(--sdl-space-4);
+}
+
+.config-panel,
+.stats-panel {
+  flex: 1 1 0;
+  min-height: 0;
+}
+
+.config-panel .panel-body,
+.stats-panel .panel-body {
+  flex: 1;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+/* 配置表单 */
+.form-group {
+  margin-bottom: var(--sdl-space-3);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.form-group label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--sdl-text-secondary);
+}
+
+.form-group input,
+.form-group select {
+  padding: 8px 10px;
+  border: 1px solid var(--sdl-border-default);
+  border-radius: var(--sdl-radius-sm);
+  background-color: var(--sdl-bg-input);
+  color: var(--sdl-text-primary);
+  font-size: 13px;
+  outline: none;
+}
+
+.form-group .sl-select {
+  font-size: 11px;
+}
+
+.form-group .sl-select-trigger {
+  height: 28px;
+  padding: 0 8px;
+}
+
+.form-group .sl-select .sl-select-label {
+  font-size: 11px !important;
+}
+
+.sl-select-options .sl-select-option {
+  font-size: 11px !important;
+  padding: 4px var(--sdl-space-3) !important;
+}
+
+.form-group input:focus,
+.form-group select:focus {
+  border-color: var(--sdl-primary);
+  box-shadow: var(--sdl-focus-ring);
+}
+
+.form-row {
+  display: flex;
+  gap: var(--sdl-space-3);
+}
+
+.flex-1 {
+  flex: 1;
+}
+
+.action-buttons {
+  margin-top: var(--sdl-space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sdl-space-2);
+}
+
+.scan-action {
+  width: 100%;
+}
+
+.scan-action .sl-button-content {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sdl-space-2);
+}
+
+/* 进度条 */
+.progress-bar-container {
+  margin-bottom: var(--sdl-space-4);
+  background: var(--sdl-bg-muted);
+  padding: var(--sdl-space-3);
+  border-radius: var(--sdl-radius-sm);
+}
+
+.progress-bar-header {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  margin-bottom: 6px;
+  font-weight: 600;
+}
+
+.progress-bar-track {
+  height: 6px;
+  background: rgba(0, 0, 0, 0.06);
+  border-radius: 99px;
+  overflow: hidden;
+}
+
+.progress-bar-fill {
+  height: 100%;
+  background: var(--sdl-primary);
+  border-radius: 99px;
+  transition: width 0.2s ease;
+}
+
+.progress-meta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--sdl-text-muted);
+  margin-top: 6px;
+}
+
+/* 指标看板 */
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: var(--sdl-space-3);
+}
+
+.stat-card {
+  padding: var(--sdl-space-3);
+  background-color: var(--sdl-bg-muted);
+  border: 1px solid var(--sdl-border-subtle);
+  border-radius: var(--sdl-radius-sm);
+  display: flex;
+  flex-direction: column;
+}
+
+.stat-label {
+  font-size: 11px;
+  color: var(--sdl-text-muted);
+}
+
+.stat-val {
+  font-size: 22px;
+  font-weight: 750;
+  margin-top: 4px;
+}
+
+/* 热门端口占比 */
+.ports-chart-container {
+  margin-top: var(--sdl-space-4);
+  border-top: 1px solid var(--sdl-border-subtle);
+  padding-top: var(--sdl-space-4);
+}
+
+.ports-chart-container label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--sdl-text-secondary);
+  display: block;
+  margin-bottom: var(--sdl-space-3);
+}
+
+.port-bar-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.port-bar-item {
+  display: flex;
+  align-items: center;
+  font-size: 11px;
+}
+
+.port-num {
+  width: 70px;
+  font-weight: 700;
+}
+
+.port-track {
+  flex: 1;
+  height: 8px;
+  background: rgba(0, 0, 0, 0.06);
+  border-radius: 4px;
+  overflow: hidden;
+  margin: 0 var(--sdl-space-3);
+}
+
+.port-fill {
+  height: 100%;
+  background: var(--sdl-accent);
+  border-radius: 4px;
+}
+
+.port-count {
+  width: 40px;
+  text-align: right;
+  color: var(--sdl-text-muted);
+}
+
+.tab-content {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sdl-space-4);
+  overflow: hidden;
+}
+
+/* 报告结果列表 */
+.results-panel {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.results-panel.collapsed {
+  flex: 0 0 auto;
+}
+
+.report-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+  text-align: center;
+  color: var(--sdl-text-muted);
+}
+
+.empty-state p {
+  font-size: 12px;
+  margin-top: var(--sdl-space-3);
+  max-width: 320px;
+}
+
+.results-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sdl-space-2);
+}
+
+.host-card {
+  border: 1px solid var(--sdl-border-default);
+  border-radius: var(--sdl-radius-sm);
+  background-color: var(--sdl-bg-card);
+  cursor: pointer;
+  overflow: hidden;
+  transition: all 0.2s;
+}
+
+.host-card:nth-child(odd) {
+  background-color: var(--sdl-bg-card);
+}
+
+.host-card:nth-child(even) {
+  background-color: var(--sdl-bg-muted);
+}
+
+.host-card.expanded {
+  background-color: var(--sdl-bg-base);
+}
+
+.host-card:hover {
+  border-color: var(--sdl-primary);
+  background-color: var(--sdl-bg-active);
+}
+
+.card-summary {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sdl-space-4);
+  padding: var(--sdl-space-3) var(--sdl-space-4);
+  font-size: 13px;
+}
+
+.summary-left {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.icon-chevron {
+  width: 0;
+  height: 0;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-top: 6px solid var(--sdl-text-muted);
+  transition: transform 0.2s;
+}
+
+.host-card.expanded .icon-chevron {
+  transform: rotate(180deg);
+}
+
+.host-ip {
+  font-weight: 700;
+}
+
+.badge-ports {
+  padding: 2px 6px;
+  background-color: var(--sdl-success-soft);
+  color: var(--sdl-success);
+  border-radius: 99px;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.summary-right {
+  flex: 1;
+  min-width: 0;
+  color: var(--sdl-text-muted);
+  font-size: 11px;
+  line-height: 1.5;
+  text-align: right;
+  white-space: normal;
+  word-break: break-word;
+}
+
+.card-detail {
+  border-top: 1px solid var(--sdl-border-subtle);
+  background-color: var(--sdl-bg-card);
+  padding: var(--sdl-space-4);
+}
+
+.section-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--sdl-text-muted);
+  margin-bottom: var(--sdl-space-3);
+  text-transform: uppercase;
+}
+
+.ports-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.ports-table th,
+.ports-table td {
+  padding: var(--sdl-space-2) var(--sdl-space-3);
+  text-align: left;
+  border-bottom: 1px solid var(--sdl-border-subtle);
+}
+
+.ports-table th {
+  color: var(--sdl-text-muted);
+  font-weight: 600;
+  background-color: var(--sdl-bg-panel);
+}
+
+.badge-status.open {
+  padding: 2px 6px;
+  background-color: var(--sdl-success-soft);
+  color: var(--sdl-success);
+  border-radius: var(--sdl-radius-xs);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.banner-code {
+  background-color: var(--sdl-bg-muted);
+  padding: 4px 8px;
+  border-radius: var(--sdl-radius-xs);
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  font-size: 11px;
+  border: 1px solid var(--sdl-border-subtle);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.no-ports-notice {
+  font-size: 12px;
+  color: var(--sdl-text-muted);
+}
+
+/* 历史列表 */
+.history-panel {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.history-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sdl-space-3);
+}
+
+.history-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: var(--sdl-space-4);
+  border: 1px solid var(--sdl-border-default);
+  border-radius: var(--sdl-radius-md);
+  background-color: var(--sdl-bg-card);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.history-item:hover {
+  border-color: var(--sdl-primary);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.03);
+}
+
+.history-cidr {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.history-meta {
+  display: flex;
+  gap: 12px;
+  font-size: 11px;
+  color: var(--sdl-text-muted);
+  margin-top: 4px;
+}
+
+.history-right {
+  display: flex;
+  align-items: center;
+  gap: var(--sdl-space-4);
+}
+
+.history-right .sl-button-content {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sdl-space-1);
+}
+
+.history-right .sl-icon {
+  display: block;
+  flex: 0 0 auto;
+}
+
+.history-stat {
+  font-size: 12px;
+  color: var(--sdl-text-secondary);
+}
+
+.history-stat strong {
+  color: var(--sdl-success);
+  font-size: 14px;
+}
+
+@media (max-width: 980px) {
+  .app-header {
+    height: auto;
+    min-height: 60px;
+    align-items: flex-start;
+    gap: var(--sdl-space-3);
+    padding-block: var(--sdl-space-3);
+  }
+
+  .env-badges {
+    justify-content: flex-end;
+    flex-wrap: wrap;
+  }
+
+  .body-left {
+    width: 320px;
+    min-width: 320px;
+  }
+}
+
+@media (max-width: 760px) {
+  .env-badges {
+    display: none;
+  }
+
+  .body-left {
+    width: 280px;
+    min-width: 280px;
+    padding: var(--sdl-space-3);
+  }
+
+  .body-right {
+    padding: var(--sdl-space-3);
+  }
+
+  .logo-title p {
+    display: none;
+  }
+}
+
+@media (max-height: 700px) {
+  .ports-chart-container {
+    display: none;
+  }
+
+  .panel-body {
+    padding: var(--sdl-space-3);
+  }
+
+  .form-group {
+    margin-bottom: var(--sdl-space-2);
+    gap: var(--sdl-space-1);
+  }
+
+  .stat-card {
+    padding: var(--sdl-space-2);
+  }
+
+  .stat-val {
+    font-size: 18px;
+  }
+}
+</style>
