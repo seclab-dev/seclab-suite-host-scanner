@@ -27,3 +27,5 @@ docker run --rm \
 ```
 
 本仓库只维护套件源码和 Docker 镜像。`.slsp` 套件交付包由 `seclab-suites` 仓库统一维护和发布。
+
+在 SecLab 内运行时，后端通过 Suite Runtime SDK 使用 `operation-logs.write` 能力上报扫描提交、终态和删除事件；运行时令牌仅挂载到后端容器。

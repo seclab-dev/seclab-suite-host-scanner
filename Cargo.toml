@@ -4,6 +4,8 @@ version = "0.1.0-alpha.1"
 edition = "2024"
 
 [dependencies]
+seclab-suite-runtime-sdk = { git = "https://github.com/seclab-dev/seclab-suite-runtime-sdk.git", tag = "rust-0.1.0-alpha.1" }
+
 axum = "0.8.9"
 rust-embed = "8.11.0"
 sqlx = { version = "0.9.0", features = ["runtime-tokio", "sqlite"] }

@@ -136,15 +136,28 @@ fn publish_progress(task_id: &str, update: ScanProgressUpdate) {
 }
 
 // 高性能并发扫描逻辑
-pub fn start_background_scan(
-    task_id: String,
-    cidr: String,
-    scan_type: String,
-    ports_str: String,
-    timeout_secs: f64,
-    max_concurrency: usize,
-    pool: SqlitePool,
-) {
+pub struct BackgroundScan {
+    pub task_id: String,
+    pub cidr: String,
+    pub scan_type: String,
+    pub ports: String,
+    pub timeout_secs: f64,
+    pub max_concurrency: usize,
+    pub pool: SqlitePool,
+    pub operation_context_id: Option<String>,
+}
+
+pub fn start_background_scan(request: BackgroundScan) {
+    let BackgroundScan {
+        task_id,
+        cidr,
+        scan_type,
+        ports: ports_str,
+        timeout_secs,
+        max_concurrency,
+        pool,
+        operation_context_id,
+    } = request;
     let cancel = register_cancel_signal(&task_id);
     tokio::spawn(async move {
         let channel_exists = {
@@ -167,6 +180,14 @@ pub fn start_background_scan(
                     &chrono::Local::now().to_rfc3339(),
                 )
                 .await;
+                emit_terminal_audit(
+                    &task_id,
+                    &cidr,
+                    "failed",
+                    0,
+                    operation_context_id.as_deref(),
+                )
+                .await;
                 remove_cancel_signal(&task_id);
                 return;
             }
@@ -181,6 +202,14 @@ pub fn start_background_scan(
                 &task_id,
                 "completed",
                 &chrono::Local::now().to_rfc3339(),
+            )
+            .await;
+            emit_terminal_audit(
+                &task_id,
+                &cidr,
+                "completed",
+                0,
+                operation_context_id.as_deref(),
             )
             .await;
             remove_cancel_signal(&task_id);
@@ -344,6 +373,14 @@ pub fn start_background_scan(
             )
             .await;
         }
+        emit_terminal_audit(
+            &task_id,
+            &cidr,
+            final_status,
+            final_scanned_hosts,
+            operation_context_id.as_deref(),
+        )
+        .await;
 
         // 发送最后一条进度广播
         publish_progress(
@@ -368,6 +405,58 @@ pub fn start_background_scan(
             remove_cancel_signal(&finished_task_id);
         });
     });
+}
+
+async fn emit_terminal_audit(
+    task_id: &str,
+    cidr: &str,
+    status: &str,
+    scanned_hosts: i32,
+    operation_context_id: Option<&str>,
+) {
+    let (code, zh_cn, en_us, outcome, impact) = match status {
+        "completed" => (
+            "scan_succeeded",
+            "扫描完成",
+            "Scan completed",
+            seclab_suite_runtime::OperationOutcome::Success,
+            seclab_suite_runtime::OperationImpact::Info,
+        ),
+        "canceled" => (
+            "scan_canceled",
+            "取消扫描",
+            "Cancel scan",
+            seclab_suite_runtime::OperationOutcome::Canceled,
+            seclab_suite_runtime::OperationImpact::Info,
+        ),
+        _ => (
+            "scan_failed",
+            "扫描失败",
+            "Scan failed",
+            seclab_suite_runtime::OperationOutcome::Failure,
+            seclab_suite_runtime::OperationImpact::Error,
+        ),
+    };
+    crate::audit::emit(
+        crate::audit::bind_context(
+            seclab_suite_runtime::OperationEvent::builder(code, zh_cn, en_us, outcome, impact),
+            operation_context_id,
+        )
+        .target(seclab_suite_runtime::OperationTarget {
+            kind: "scan_task".to_string(),
+            id: task_id.to_string(),
+            display_name: Some(cidr.to_string()),
+            ownership: None,
+        })
+        .task_id(task_id)
+        .parameter(
+            "scannedHosts",
+            seclab_suite_runtime::ParameterValue::Number(f64::from(scanned_hosts)),
+        )
+        .build()
+        .expect("static scan audit event must be valid"),
+    )
+    .await;
 }
 
 fn is_stop_requested(shutdown: &watch::Receiver<bool>, cancel: &watch::Receiver<bool>) -> bool {

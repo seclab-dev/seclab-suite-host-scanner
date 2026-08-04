@@ -1,3 +1,4 @@
+mod audit;
 mod db;
 mod scan;
 
@@ -5,7 +6,7 @@ use axum::{
     Json, Router,
     body::Body,
     extract::{Path, State},
-    http::{HeaderValue, StatusCode, Uri, header},
+    http::{HeaderMap, HeaderValue, StatusCode, Uri, header},
     response::{
         IntoResponse, Response,
         sse::{Event, KeepAlive, Sse},
@@ -85,6 +86,7 @@ async fn main() {
             std::process::exit(1);
         }
     };
+    audit::init().await;
     match db::fail_interrupted_tasks(&pool, &chrono::Local::now().to_rfc3339()).await {
         Ok(count) if count > 0 => {
             tracing::warn!(
@@ -298,8 +300,10 @@ async fn network_handler() -> impl IntoResponse {
 // 启动扫描任务
 async fn create_scan_handler(
     State(pool): State<SqlitePool>,
+    headers: HeaderMap,
     Json(payload): Json<CreateScanPayload>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let operation_context = audit::operation_context(&headers);
     // 验证网段
     let cidr = payload.cidr.trim().to_string();
     let net: ipnet::Ipv4Net = cidr
@@ -353,26 +357,54 @@ async fn create_scan_handler(
     };
 
     // 写入数据库
-    db::create_task(&pool, &new_task).await.map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("创建任务失败: {}", e),
+    if let Err(error) = db::create_task(&pool, &new_task).await {
+        audit::emit(
+            audit::bind_context(
+                seclab_suite_runtime::OperationEvent::builder(
+                    "scan_submitted",
+                    "提交扫描",
+                    "Submit scan",
+                    seclab_suite_runtime::OperationOutcome::Failure,
+                    seclab_suite_runtime::OperationImpact::Error,
+                ),
+                operation_context.as_deref(),
+            )
+            .error("SCAN_CREATE_FAILED", error.to_string())
+            .build()
+            .expect("static scan audit event must be valid"),
         )
-    })?;
+        .await;
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("创建任务失败: {error}"),
+        ));
+    }
+
+    audit::emit(scan_audit_event(
+        "scan_submitted",
+        "提交扫描",
+        "Submit scan",
+        &new_task,
+        seclab_suite_runtime::OperationOutcome::Success,
+        seclab_suite_runtime::OperationImpact::Info,
+        operation_context.as_deref(),
+    ))
+    .await;
 
     // 注册进度广播接收通道
     let _ = scan::register_progress_channel(&task_id);
 
     // 后台异步起扫描
-    scan::start_background_scan(
-        task_id.clone(),
-        new_task.cidr,
-        new_task.scan_type,
-        new_task.ports,
-        new_task.timeout,
+    scan::start_background_scan(scan::BackgroundScan {
+        task_id: task_id.clone(),
+        cidr: new_task.cidr,
+        scan_type: new_task.scan_type,
+        ports: new_task.ports,
+        timeout_secs: new_task.timeout,
         max_concurrency,
         pool,
-    );
+        operation_context_id: operation_context,
+    });
 
     Ok(Json(CreateScanResponse { task_id }))
 }
@@ -421,14 +453,61 @@ async fn get_task_handler(
 async fn delete_task_handler(
     Path(task_id): Path<String>,
     State(pool): State<SqlitePool>,
+    headers: HeaderMap,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let operation_context = audit::operation_context(&headers);
     let _ = scan::cancel_task(&task_id);
-    db::delete_task(&pool, &task_id).await.map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("删除任务失败: {}", e),
+    if let Err(error) = db::delete_task(&pool, &task_id).await {
+        audit::emit(
+            audit::bind_context(
+                seclab_suite_runtime::OperationEvent::builder(
+                    "scan_deleted",
+                    "删除扫描",
+                    "Delete scan",
+                    seclab_suite_runtime::OperationOutcome::Failure,
+                    seclab_suite_runtime::OperationImpact::Error,
+                ),
+                operation_context.as_deref(),
+            )
+            .target(seclab_suite_runtime::OperationTarget {
+                kind: "scan_task".to_string(),
+                id: task_id.clone(),
+                display_name: None,
+                ownership: None,
+            })
+            .task_id(task_id.clone())
+            .error("SCAN_DELETE_FAILED", "Scan deletion failed")
+            .build()
+            .expect("static scan audit event must be valid"),
         )
-    })?;
+        .await;
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("删除任务失败: {error}"),
+        ));
+    }
+    audit::emit(
+        audit::bind_context(
+            seclab_suite_runtime::OperationEvent::builder(
+                "scan_deleted",
+                "删除扫描",
+                "Delete scan",
+                seclab_suite_runtime::OperationOutcome::Success,
+                seclab_suite_runtime::OperationImpact::Warning,
+            ),
+            operation_context.as_deref(),
+        )
+        .target(seclab_suite_runtime::OperationTarget {
+            kind: "scan_task".to_string(),
+            id: task_id.clone(),
+            display_name: None,
+            ownership: None,
+        })
+        .task_id(task_id)
+        .build()
+        .expect("static scan audit event must be valid"),
+    )
+    .await;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -436,7 +515,9 @@ async fn delete_task_handler(
 async fn cancel_task_handler(
     Path(task_id): Path<String>,
     State(pool): State<SqlitePool>,
+    headers: HeaderMap,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let operation_context = audit::operation_context(&headers);
     let task = db::get_task(&pool, &task_id).await.map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -463,7 +544,7 @@ async fn cancel_task_handler(
         }));
     }
 
-    db::finish_task_with_progress(
+    if let Err(error) = db::finish_task_with_progress(
         &pool,
         &task_id,
         task.progress,
@@ -472,17 +553,78 @@ async fn cancel_task_handler(
         &chrono::Local::now().to_rfc3339(),
     )
     .await
-    .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to cancel scan task: {}", e),
+    {
+        audit::emit(
+            audit::bind_context(
+                seclab_suite_runtime::OperationEvent::builder(
+                    "scan_canceled",
+                    "取消扫描",
+                    "Cancel scan",
+                    seclab_suite_runtime::OperationOutcome::Failure,
+                    seclab_suite_runtime::OperationImpact::Error,
+                ),
+                operation_context.as_deref(),
+            )
+            .target(seclab_suite_runtime::OperationTarget {
+                kind: "scan_task".to_string(),
+                id: task_id.clone(),
+                display_name: Some(task.cidr.clone()),
+                ownership: None,
+            })
+            .task_id(task_id.clone())
+            .error("SCAN_CANCEL_FAILED", "Scan cancellation failed")
+            .build()
+            .expect("static scan audit event must be valid"),
         )
-    })?;
+        .await;
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to cancel scan task: {error}"),
+        ));
+    }
+    audit::emit(scan_audit_event(
+        "scan_canceled",
+        "取消扫描",
+        "Cancel scan",
+        &task,
+        seclab_suite_runtime::OperationOutcome::Canceled,
+        seclab_suite_runtime::OperationImpact::Info,
+        operation_context.as_deref(),
+    ))
+    .await;
 
     Ok(Json(CancelTaskResponse {
         task_id,
         status: "canceled".to_string(),
     }))
+}
+
+fn scan_audit_event(
+    code: &str,
+    zh_cn: &str,
+    en_us: &str,
+    task: &db::ScanTask,
+    outcome: seclab_suite_runtime::OperationOutcome,
+    impact: seclab_suite_runtime::OperationImpact,
+    operation_context_id: Option<&str>,
+) -> seclab_suite_runtime::OperationEvent {
+    audit::bind_context(
+        seclab_suite_runtime::OperationEvent::builder(code, zh_cn, en_us, outcome, impact),
+        operation_context_id,
+    )
+    .target(seclab_suite_runtime::OperationTarget {
+        kind: "scan_task".to_string(),
+        id: task.id.clone(),
+        display_name: Some(task.cidr.clone()),
+        ownership: None,
+    })
+    .task_id(task.id.clone())
+    .parameter(
+        "hostCount",
+        seclab_suite_runtime::ParameterValue::Number(f64::from(task.total_hosts)),
+    )
+    .build()
+    .expect("static scan audit event must be valid")
 }
 
 // SSE (Server-Sent Events) 实时进度推送
@@ -569,4 +711,39 @@ async fn progress_handler(
 
 fn is_terminal_task_status(status: &str) -> bool {
     matches!(status, "completed" | "failed" | "canceled")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scan_event_contains_task_summary_without_scan_configuration() {
+        let task = db::ScanTask {
+            id: "task-1".to_string(),
+            cidr: "192.0.2.0/24".to_string(),
+            scan_type: "tcp".to_string(),
+            ports: "22,80".to_string(),
+            timeout: 1.0,
+            status: "pending".to_string(),
+            progress: 0,
+            total_hosts: 254,
+            scanned_hosts: 0,
+            created_at: "2026-08-04T00:00:00Z".to_string(),
+            completed_at: None,
+        };
+        let event = scan_audit_event(
+            "scan_submitted",
+            "提交扫描",
+            "Submit scan",
+            &task,
+            seclab_suite_runtime::OperationOutcome::Success,
+            seclab_suite_runtime::OperationImpact::Info,
+            Some("context-1"),
+        );
+        let value = serde_json::to_value(event).unwrap();
+        assert_eq!(value["taskId"], "task-1");
+        assert_eq!(value["operationContextId"], "context-1");
+        assert!(value.to_string().find("22,80").is_none());
+    }
 }
