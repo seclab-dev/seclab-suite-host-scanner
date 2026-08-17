@@ -87,14 +87,14 @@ function portCount(host: HostScanResult, status: PortScanDetail["status"]) {
 }
 
 function portStatusLabel(status: PortScanDetail["status"]) {
-  return status === "open" ? t.value.portStatusOpen : t.value.portStatusRefused;
+  return status === "open" ? t.value.portStatusOpen : t.value.portStatusClosed;
 }
 
 function portBannerText(port: PortScanDetail) {
   if (port.banner) return port.banner;
   return port.status === "open"
     ? t.value.establishedNoBanner
-    : t.value.connectionRefusedNoBanner;
+    : t.value.closedPortNoBanner;
 }
 </script>
 
@@ -376,10 +376,10 @@ function portBannerText(port: PortScanDetail) {
                         {{ t.openPortsCount(portCount(host, "open")) }}
                       </span>
                       <span
-                        class="badge-ports refused"
-                        v-if="portCount(host, 'refused') > 0"
+                        class="badge-ports closed"
+                        v-if="portCount(host, 'closed') > 0"
                       >
-                        {{ t.refusedPortsCount(portCount(host, "refused")) }}
+                        {{ t.closedPortsCount(portCount(host, "closed")) }}
                       </span>
                     </div>
                     <div class="summary-right font-mono">
@@ -1059,9 +1059,9 @@ body,
   font-weight: 700;
 }
 
-.badge-ports.refused {
+.badge-ports.closed {
   background-color: var(--sdl-bg-muted);
-  color: var(--sdl-danger);
+  color: var(--sdl-text-secondary);
 }
 
 .summary-right {
@@ -1120,9 +1120,9 @@ body,
   color: var(--sdl-success);
 }
 
-.badge-status.refused {
+.badge-status.closed {
   background-color: var(--sdl-bg-muted);
-  color: var(--sdl-danger);
+  color: var(--sdl-text-secondary);
 }
 
 .banner-code {

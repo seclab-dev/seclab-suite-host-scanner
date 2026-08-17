@@ -24,7 +24,7 @@ export interface ScanTask {
 
 export interface PortScanDetail {
   port: number;
-  status: "open" | "refused";
+  status: "open" | "closed";
   banner: string | null;
 }
 

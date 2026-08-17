@@ -30,7 +30,7 @@ pub struct ScanProgressUpdate {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PortScanDetail {
     pub port: u16,
-    pub status: String, // "open", "refused"
+    pub status: String, // "open", "closed"
     pub banner: Option<String>,
 }
 
@@ -544,10 +544,10 @@ async fn scan_single_host(
                     }
                     Ok(Err(e)) => {
                         if e.kind() == std::io::ErrorKind::ConnectionRefused {
-                            // 被连接拒绝（RST），也说明 IP 在线
+                            // TCP RST 表示端口关闭，同时说明目标路径有响应。
                             port_results.push(PortScanDetail {
                                 port,
-                                status: "refused".to_string(),
+                                status: "closed".to_string(),
                                 banner: None,
                             });
                         }
@@ -561,29 +561,29 @@ async fn scan_single_host(
     }
 }
 
-/// 根据开放和拒绝端口组装 TCP 存活主机结果。
+/// 根据开放和关闭端口组装 TCP 存活主机结果。
 fn tcp_host_result(host: &str, port_results: Vec<PortScanDetail>) -> Option<ScanHostResult> {
     let open_count = port_results
         .iter()
         .filter(|port| port.status == "open")
         .count();
-    let refused_count = port_results
+    let closed_count = port_results
         .iter()
-        .filter(|port| port.status == "refused")
+        .filter(|port| port.status == "closed")
         .count();
-    if open_count == 0 && refused_count == 0 {
+    if open_count == 0 && closed_count == 0 {
         return None;
     }
 
     let open_port_label = if open_count == 1 { "port" } else { "ports" };
-    let refused_port_label = if refused_count == 1 { "port" } else { "ports" };
-    let detail = match (open_count, refused_count) {
+    let closed_port_label = if closed_count == 1 { "port" } else { "ports" };
+    let detail = match (open_count, closed_count) {
         (open_count, 0) => format!("Found {open_count} open TCP {open_port_label}"),
-        (0, refused_count) => format!(
-            "Connection refused on {refused_count} TCP {refused_port_label} (RST received; host is online)"
+        (0, closed_count) => format!(
+            "Found {closed_count} closed TCP {closed_port_label} (RST received; the target path responded)"
         ),
-        (open_count, refused_count) => format!(
-            "Found {open_count} open TCP {open_port_label}; {refused_count} TCP {refused_port_label} refused the connection"
+        (open_count, closed_count) => format!(
+            "Found {open_count} open TCP {open_port_label}; {closed_count} closed TCP {closed_port_label}"
         ),
     };
     Some(ScanHostResult {
@@ -738,36 +738,33 @@ mod tests {
     }
 
     #[test]
-    fn refused_tcp_ports_are_preserved_for_report_verification() {
-        let refused_ports = [22, 80, 443, 3389, 8080]
+    fn closed_tcp_ports_are_preserved_for_report_verification() {
+        let closed_ports = [22, 80, 443, 3389, 8080]
             .into_iter()
-            .map(|value| port(value, "refused"))
+            .map(|value| port(value, "closed"))
             .collect();
 
-        let result = tcp_host_result("192.0.2.10", refused_ports).unwrap();
+        let result = tcp_host_result("192.0.2.10", closed_ports).unwrap();
 
         assert_eq!(result.ports.len(), 5);
-        assert!(result.ports.iter().all(|port| port.status == "refused"));
+        assert!(result.ports.iter().all(|port| port.status == "closed"));
         assert_eq!(
             result.detail,
-            "Connection refused on 5 TCP ports (RST received; host is online)"
+            "Found 5 closed TCP ports (RST received; the target path responded)"
         );
     }
 
     #[test]
-    fn mixed_tcp_results_keep_open_and_refused_port_statuses() {
+    fn mixed_tcp_results_keep_open_and_closed_port_statuses() {
         let result =
-            tcp_host_result("192.0.2.11", vec![port(22, "open"), port(80, "refused")]).unwrap();
+            tcp_host_result("192.0.2.11", vec![port(22, "open"), port(80, "closed")]).unwrap();
 
-        assert_eq!(result.ports, vec![port(22, "open"), port(80, "refused")]);
-        assert_eq!(
-            result.detail,
-            "Found 1 open TCP port; 1 TCP port refused the connection"
-        );
+        assert_eq!(result.ports, vec![port(22, "open"), port(80, "closed")]);
+        assert_eq!(result.detail, "Found 1 open TCP port; 1 closed TCP port");
     }
 
     #[test]
-    fn tcp_result_requires_an_open_or_refused_response() {
+    fn tcp_result_requires_an_open_or_closed_response() {
         assert!(tcp_host_result("192.0.2.12", Vec::new()).is_none());
     }
 

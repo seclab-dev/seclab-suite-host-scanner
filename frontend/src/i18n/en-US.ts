@@ -40,17 +40,17 @@ export const enUS: typeof zhCN = {
     "After configuring target network and starting the scan, alive hosts and service banners will keep updating here.",
   openPortsCount: (count: number) =>
     `${count} port${count === 1 ? "" : "s"} open`,
-  refusedPortsCount: (count: number) =>
-    `${count} port${count === 1 ? "" : "s"} refused`,
+  closedPortsCount: (count: number) =>
+    `${count} port${count === 1 ? "" : "s"} closed`,
   portDetailTitle: "TCP Port Probe Details",
   thPort: "Port",
   thStatus: "Status",
   thBanner: "Service Banner / Detail",
   portStatusOpen: "OPEN",
-  portStatusRefused: "REFUSED",
+  portStatusClosed: "CLOSED",
   establishedNoBanner: "Connection established (No active banner pushed)",
-  connectionRefusedNoBanner:
-    "Connection refused (RST); this response confirms the host is online",
+  closedPortNoBanner:
+    "Port closed (TCP RST received; the target path responded)",
   historyReports: "Historical Scan Reports",
   historyReportsCount: (count: number) => `Historical Scan Reports (${count})`,
   historyReportDesc:
