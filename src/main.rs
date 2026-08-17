@@ -308,25 +308,25 @@ async fn create_scan_handler(
     let cidr = payload.cidr.trim().to_string();
     let net: ipnet::Ipv4Net = cidr
         .parse()
-        .map_err(|e| (StatusCode::BAD_REQUEST, format!("CIDR 格式不正确: {}", e)))?;
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid CIDR: {e}")))?;
 
     let total_hosts = net.hosts().count();
     if total_hosts == 0 {
         return Err((
             StatusCode::BAD_REQUEST,
-            "网段内不含有效的主机地址".to_string(),
+            "The CIDR does not contain any usable host addresses".to_string(),
         ));
     }
     if total_hosts > 256 {
         return Err((
             StatusCode::BAD_REQUEST,
-            format!("主机数量 ({}) 超过单次扫描上限 256", total_hosts),
+            format!("Host count ({total_hosts}) exceeds the per-scan limit of 256"),
         ));
     }
 
     let scan_type = payload.scan_type.to_lowercase();
     if scan_type != "tcp" && scan_type != "icmp" {
-        return Err((StatusCode::BAD_REQUEST, "不支持的扫描类型".to_string()));
+        return Err((StatusCode::BAD_REQUEST, "Unsupported scan type".to_string()));
     }
 
     let ports_str = payload
@@ -377,7 +377,7 @@ async fn create_scan_handler(
         .await;
         return Err((
             StatusCode::INTERNAL_SERVER_ERROR,
-            format!("创建任务失败: {error}"),
+            format!("Failed to create scan task: {error}"),
         ));
     }
 
@@ -417,7 +417,7 @@ async fn list_tasks_handler(
     let tasks = db::list_tasks(&pool).await.map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            format!("获取任务列表失败: {}", e),
+            format!("Failed to list scan tasks: {e}"),
         )
     })?;
     Ok(Json(tasks))
@@ -431,7 +431,7 @@ async fn get_task_handler(
     let task = db::get_task(&pool, &task_id).await.map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            format!("读取任务元数据失败: {}", e),
+            format!("Failed to read scan task metadata: {e}"),
         )
     })?;
 
@@ -443,7 +443,7 @@ async fn get_task_handler(
     let results = db::get_task_results(&pool, &task_id).await.map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            format!("读取扫描报告结果失败: {}", e),
+            format!("Failed to read scan report results: {e}"),
         )
     })?;
 
@@ -484,7 +484,7 @@ async fn delete_task_handler(
         .await;
         return Err((
             StatusCode::INTERNAL_SERVER_ERROR,
-            format!("删除任务失败: {error}"),
+            format!("Failed to delete scan task: {error}"),
         ));
     }
     audit::emit(

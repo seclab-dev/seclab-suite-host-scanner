@@ -13,6 +13,7 @@ import {
 import HostGridPanel from "@/components/HostGridPanel.vue";
 import { useHostScanner } from "@/composables/useHostScanner";
 import { t } from "@/i18n";
+import type { HostScanResult, PortScanDetail } from "@/types/scanner";
 
 const {
   networkInfo,
@@ -81,15 +82,19 @@ function handleCancelDelete() {
   deleteTaskId.value = null;
 }
 
-function emptyPortNotice(host: { detail: string }) {
-  if (
-    host.detail.includes("TCP 连接被拒绝") ||
-    host.detail.toLowerCase().includes("refused") ||
-    host.detail.toLowerCase().includes("rejected")
-  ) {
-    return t.value.hostRejectedNotice;
-  }
-  return t.value.hostIcmpOnlyNotice;
+function portCount(host: HostScanResult, status: PortScanDetail["status"]) {
+  return host.parsedPorts?.filter((port) => port.status === status).length ?? 0;
+}
+
+function portStatusLabel(status: PortScanDetail["status"]) {
+  return status === "open" ? t.value.portStatusOpen : t.value.portStatusRefused;
+}
+
+function portBannerText(port: PortScanDetail) {
+  if (port.banner) return port.banner;
+  return port.status === "open"
+    ? t.value.establishedNoBanner
+    : t.value.connectionRefusedNoBanner;
 }
 </script>
 
@@ -364,9 +369,15 @@ function emptyPortNotice(host: { detail: string }) {
                       <span class="host-ip font-mono">{{ host.host }}</span>
                       <span
                         class="badge-ports"
-                        v-if="host.parsedPorts && host.parsedPorts.length > 0"
+                        v-if="portCount(host, 'open') > 0"
                       >
-                        {{ t.openPortsCount(host.parsedPorts.length) }}
+                        {{ t.openPortsCount(portCount(host, "open")) }}
+                      </span>
+                      <span
+                        class="badge-ports refused"
+                        v-if="portCount(host, 'refused') > 0"
+                      >
+                        {{ t.refusedPortsCount(portCount(host, "refused")) }}
                       </span>
                     </div>
                     <div class="summary-right font-mono">
@@ -396,11 +407,13 @@ function emptyPortNotice(host: { detail: string }) {
                                 PORT {{ p.port }}
                               </td>
                               <td>
-                                <span class="badge-status open">OPEN</span>
+                                <span class="badge-status" :class="p.status">
+                                  {{ portStatusLabel(p.status) }}
+                                </span>
                               </td>
                               <td>
                                 <code class="banner-code font-mono">{{
-                                  p.banner || t.establishedNoBanner
+                                  portBannerText(p)
                                 }}</code>
                               </td>
                             </tr>
@@ -408,7 +421,7 @@ function emptyPortNotice(host: { detail: string }) {
                         </table>
                       </div>
                       <div class="no-ports-notice" v-else>
-                        {{ emptyPortNotice(host) }}
+                        {{ t.hostIcmpOnlyNotice }}
                       </div>
                     </div>
                   </div>
@@ -1044,6 +1057,11 @@ body,
   font-weight: 700;
 }
 
+.badge-ports.refused {
+  background-color: var(--sdl-bg-muted);
+  color: var(--sdl-danger);
+}
+
 .summary-right {
   flex: 1;
   min-width: 0;
@@ -1088,13 +1106,21 @@ body,
   background-color: var(--sdl-bg-panel);
 }
 
-.badge-status.open {
+.badge-status {
   padding: 2px 6px;
-  background-color: var(--sdl-success-soft);
-  color: var(--sdl-success);
   border-radius: var(--sdl-radius-xs);
   font-size: 10px;
   font-weight: 700;
+}
+
+.badge-status.open {
+  background-color: var(--sdl-success-soft);
+  color: var(--sdl-success);
+}
+
+.badge-status.refused {
+  background-color: var(--sdl-bg-muted);
+  color: var(--sdl-danger);
 }
 
 .banner-code {

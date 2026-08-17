@@ -26,10 +26,10 @@ pub struct ScanProgressUpdate {
     pub open_ports: Vec<u16>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PortScanDetail {
     pub port: u16,
-    pub status: String, // "open", "closed_or_alive"
+    pub status: String, // "open", "refused"
     pub banner: Option<String>,
 }
 
@@ -281,13 +281,20 @@ pub fn start_background_scan(request: BackgroundScan) {
                 continue;
             };
             let (host_status, open_ports) = match &result {
-                Some(result) if result.ports.is_empty() => {
-                    ("alive-no-port".to_string(), Vec::new())
+                Some(result) => {
+                    let open_ports = result
+                        .ports
+                        .iter()
+                        .filter(|port| port.status == "open")
+                        .map(|port| port.port)
+                        .collect::<Vec<_>>();
+                    let host_status = if open_ports.is_empty() {
+                        "alive-no-port"
+                    } else {
+                        "alive-with-port"
+                    };
+                    (host_status.to_string(), open_ports)
                 }
-                Some(result) => (
-                    "alive-with-port".to_string(),
-                    result.ports.iter().map(|port| port.port).collect(),
-                ),
                 None => ("offline".to_string(), Vec::new()),
             };
 
@@ -512,9 +519,7 @@ async fn scan_single_host(
         }
     } else {
         // TCP 端口扫描及指纹获取
-        let mut open_ports = Vec::new();
-        let mut alive = false;
-        let mut refuse_count = 0;
+        let mut port_results = Vec::new();
 
         for &port in ports {
             let addr_str = format!("{}:{}", host, port);
@@ -523,10 +528,9 @@ async fn scan_single_host(
             if let Ok(addr) = socket_addr {
                 match tokio::time::timeout(timeout_dur, TcpStream::connect(addr)).await {
                     Ok(Ok(mut _stream)) => {
-                        alive = true;
                         // 连接成功，尝试获取 Banner 指纹
                         let banner = grab_banner_with_timeout(host, port, timeout_dur).await;
-                        open_ports.push(PortScanDetail {
+                        port_results.push(PortScanDetail {
                             port,
                             status: "open".to_string(),
                             banner,
@@ -535,7 +539,11 @@ async fn scan_single_host(
                     Ok(Err(e)) => {
                         if e.kind() == std::io::ErrorKind::ConnectionRefused {
                             // 被连接拒绝（RST），也说明 IP 在线
-                            refuse_count += 1;
+                            port_results.push(PortScanDetail {
+                                port,
+                                status: "refused".to_string(),
+                                banner: None,
+                            });
                         }
                     }
                     Err(_) => {} // 超时
@@ -543,26 +551,41 @@ async fn scan_single_host(
             }
         }
 
-        if alive || refuse_count > 0 {
-            let status = "alive".to_string();
-            let detail = if alive {
-                format!("发现 {} 个开放端口", open_ports.len())
-            } else {
-                format!(
-                    "TCP 连接被拒绝 (发现了 {} 个活动端口，主机在线)",
-                    refuse_count
-                )
-            };
-            Some(TempHostResult {
-                host: host.to_string(),
-                status,
-                ports: open_ports,
-                detail,
-            })
-        } else {
-            None
-        }
+        tcp_host_result(host, port_results)
     }
+}
+
+/// 根据开放和拒绝端口组装可持久化的 TCP 存活主机结果。
+fn tcp_host_result(host: &str, port_results: Vec<PortScanDetail>) -> Option<TempHostResult> {
+    let open_count = port_results
+        .iter()
+        .filter(|port| port.status == "open")
+        .count();
+    let refused_count = port_results
+        .iter()
+        .filter(|port| port.status == "refused")
+        .count();
+    if open_count == 0 && refused_count == 0 {
+        return None;
+    }
+
+    let open_port_label = if open_count == 1 { "port" } else { "ports" };
+    let refused_port_label = if refused_count == 1 { "port" } else { "ports" };
+    let detail = match (open_count, refused_count) {
+        (open_count, 0) => format!("Found {open_count} open TCP {open_port_label}"),
+        (0, refused_count) => format!(
+            "Connection refused on {refused_count} TCP {refused_port_label} (RST received; host is online)"
+        ),
+        (open_count, refused_count) => format!(
+            "Found {open_count} open TCP {open_port_label}; {refused_count} TCP {refused_port_label} refused the connection"
+        ),
+    };
+    Some(TempHostResult {
+        host: host.to_string(),
+        status: "alive".to_string(),
+        ports: port_results,
+        detail,
+    })
 }
 
 // 异步并发 Ping 逻辑（调用系统进程）
@@ -582,21 +605,27 @@ async fn ping_host(host: &str, timeout_secs: f64) -> (String, String) {
             if out.status.success() {
                 let stdout = String::from_utf8_lossy(&out.stdout);
                 let lines: Vec<&str> = stdout.trim().lines().collect();
-                let last_line = lines.last().cloned().unwrap_or("Ping 成功，主机存活");
+                let last_line = lines
+                    .last()
+                    .cloned()
+                    .unwrap_or("Ping succeeded; host is online");
                 ("alive".to_string(), last_line.to_string())
             } else {
                 let stderr = String::from_utf8_lossy(&out.stderr);
                 if stderr.contains("Operation not permitted") {
                     (
                         "error".to_string(),
-                        "Ping 失败：缺少 CAP_NET_RAW 权限".to_string(),
+                        "Ping failed: CAP_NET_RAW capability is required".to_string(),
                     )
                 } else {
-                    ("timeout".to_string(), "ICMP 无响应 (超时)".to_string())
+                    (
+                        "timeout".to_string(),
+                        "ICMP request timed out without a response".to_string(),
+                    )
                 }
             }
         }
-        Err(e) => ("error".to_string(), format!("执行 Ping 失败: {}", e)),
+        Err(e) => ("error".to_string(), format!("Failed to execute ping: {e}")),
     }
 }
 
@@ -688,4 +717,51 @@ async fn grab_tcp_banner(addr: SocketAddr, timeout_dur: Duration) -> Option<Stri
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PortScanDetail, tcp_host_result};
+
+    fn port(port: u16, status: &str) -> PortScanDetail {
+        PortScanDetail {
+            port,
+            status: status.to_string(),
+            banner: None,
+        }
+    }
+
+    #[test]
+    fn refused_tcp_ports_are_preserved_for_report_verification() {
+        let refused_ports = [22, 80, 443, 3389, 8080]
+            .into_iter()
+            .map(|value| port(value, "refused"))
+            .collect();
+
+        let result = tcp_host_result("192.0.2.10", refused_ports).unwrap();
+
+        assert_eq!(result.ports.len(), 5);
+        assert!(result.ports.iter().all(|port| port.status == "refused"));
+        assert_eq!(
+            result.detail,
+            "Connection refused on 5 TCP ports (RST received; host is online)"
+        );
+    }
+
+    #[test]
+    fn mixed_tcp_results_keep_open_and_refused_port_statuses() {
+        let result =
+            tcp_host_result("192.0.2.11", vec![port(22, "open"), port(80, "refused")]).unwrap();
+
+        assert_eq!(result.ports, vec![port(22, "open"), port(80, "refused")]);
+        assert_eq!(
+            result.detail,
+            "Found 1 open TCP port; 1 TCP port refused the connection"
+        );
+    }
+
+    #[test]
+    fn tcp_result_requires_an_open_or_refused_response() {
+        assert!(tcp_host_result("192.0.2.12", Vec::new()).is_none());
+    }
 }

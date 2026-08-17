@@ -2,8 +2,6 @@ import type { zhCN } from "./zh-CN";
 
 export const enUS: typeof zhCN = {
   deleteTaskFailed: "Delete task failed",
-  hostRejectedNotice:
-    "Target host is online, but the configured TCP ports returned connection refused, no service banners could be read.",
   hostIcmpOnlyNotice:
     "This host currently only responded to ICMP Ping discovery; no TCP service banners were found.",
   title: "Host Scanner",
@@ -42,11 +40,17 @@ export const enUS: typeof zhCN = {
     "After configuring target network and starting the scan, alive hosts and service banners will keep updating here.",
   openPortsCount: (count: number) =>
     `${count} port${count === 1 ? "" : "s"} open`,
-  portDetailTitle: "Port Banner Details (Banner Grabbing)",
+  refusedPortsCount: (count: number) =>
+    `${count} port${count === 1 ? "" : "s"} refused`,
+  portDetailTitle: "TCP Port Probe Details",
   thPort: "Port",
   thStatus: "Status",
-  thBanner: "Service Banner",
+  thBanner: "Service Banner / Detail",
+  portStatusOpen: "OPEN",
+  portStatusRefused: "REFUSED",
   establishedNoBanner: "Connection established (No active banner pushed)",
+  connectionRefusedNoBanner:
+    "Connection refused (RST); this response confirms the host is online",
   historyReports: "Historical Scan Reports",
   historyReportsCount: (count: number) => `Historical Scan Reports (${count})`,
   historyReportDesc:

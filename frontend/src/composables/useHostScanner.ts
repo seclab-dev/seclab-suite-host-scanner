@@ -214,7 +214,10 @@ export function useHostScanner() {
       });
       currentResults.value.forEach((result) => {
         if (!ipStates[result.host]) return;
-        const openPorts = result.parsedPorts?.map((port) => port.port) ?? [];
+        const openPorts =
+          result.parsedPorts
+            ?.filter((port) => port.status === "open")
+            .map((port) => port.port) ?? [];
         ipStates[result.host] = {
           status: openPorts.length > 0 ? "alive-with-port" : "alive-no-port",
           ports: openPorts,
@@ -468,18 +471,20 @@ export function useHostScanner() {
   const stats = computed(() => {
     const totalAlive = currentResults.value.length;
     const withPorts = currentResults.value.filter(
-      (result) => result.parsedPorts?.length,
+      (result) =>
+        result.parsedPorts?.some((port) => port.status === "open") ?? false,
     ).length;
     const portCounts: Record<number, number> = {};
     currentResults.value.forEach((result) => {
-      result.parsedPorts?.forEach((port) => {
-        portCounts[port.port] = (portCounts[port.port] ?? 0) + 1;
-      });
+      result.parsedPorts
+        ?.filter((port) => port.status === "open")
+        .forEach((port) => {
+          portCounts[port.port] = (portCounts[port.port] ?? 0) + 1;
+        });
     });
     return {
       totalAlive,
       withPorts,
-      onlyIcmp: totalAlive - withPorts,
       sortedPorts: Object.entries(portCounts)
         .map(([port, count]) => ({ port: Number(port), count }))
         .sort((left, right) => right.count - left.count)

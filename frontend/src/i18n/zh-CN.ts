@@ -1,7 +1,5 @@
 export const zhCN = {
   deleteTaskFailed: "删除任务失败",
-  hostRejectedNotice:
-    "目标主机在线，但配置的 TCP 端口均返回连接拒绝，没有可读取的服务指纹。",
   hostIcmpOnlyNotice:
     "该主机目前仅响应了 ICMP Ping 探测，未发现可展示的 TCP 服务指纹。",
   title: "主机扫描",
@@ -39,11 +37,15 @@ export const zhCN = {
   realtimeReportDesc:
     "配置目标网段并启动扫描后，存活主机与服务指纹将在这里持续更新。",
   openPortsCount: (count: number) => `${count} 个端口开放`,
-  portDetailTitle: "端口指纹详情 (Banner Grabbing)",
+  refusedPortsCount: (count: number) => `${count} 个端口拒绝连接`,
+  portDetailTitle: "TCP 端口探测详情",
   thPort: "端口",
   thStatus: "状态",
-  thBanner: "服务指纹 (Banner)",
+  thBanner: "服务指纹 / 说明",
+  portStatusOpen: "OPEN",
+  portStatusRefused: "REFUSED",
   establishedNoBanner: "连接已建立 (无主动推送 Banner)",
+  connectionRefusedNoBanner: "连接被拒绝 (RST)，该响应可确认主机在线",
   historyReports: "历史扫描报告",
   historyReportsCount: (count: number) => `历史扫描报告 (${count})`,
   historyReportDesc: "完成扫描后，任务记录和资产报告会保存在这里。",
