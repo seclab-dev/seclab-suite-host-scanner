@@ -27,7 +27,7 @@ export const zhCN = {
     `进度: ${scanned} / ${total}`,
   currentIp: (ip: string) => `当前 IP: ${ip}`,
   aliveHosts: "存活主机",
-  openPortServices: "开放端口服务",
+  openPorts: "开放端口",
   elapsedTime: "用时",
   totalTime: "总计用时",
   popularPorts: "热门开放端口分布",

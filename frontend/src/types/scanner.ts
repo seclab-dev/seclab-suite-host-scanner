@@ -39,6 +39,13 @@ export interface HostScanResult {
   expanded?: boolean;
 }
 
+export interface ScanProgressHostResult {
+  host: string;
+  status: string;
+  ports: PortScanDetail[];
+  detail: string;
+}
+
 export type HostVisualState =
   | "pending"
   | "scanning"
@@ -60,4 +67,5 @@ export interface ScanProgressUpdate {
   status: string;
   host_status?: HostVisualState;
   open_ports: number[];
+  host_result: ScanProgressHostResult | null;
 }

@@ -687,6 +687,7 @@ async fn progress_handler(
                 status: task.status,
                 host_status: None,
                 open_ports: Vec::new(),
+                host_result: None,
             })
             .unwrap();
         let s = stream::once(async { Ok(ev) }).boxed();
@@ -704,6 +705,7 @@ async fn progress_handler(
             status: task.status,
             host_status: None,
             open_ports: Vec::new(),
+            host_result: None,
         })
         .unwrap();
     let fallback = stream::once(async { Ok(event) }).boxed();

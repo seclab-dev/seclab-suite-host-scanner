@@ -29,7 +29,7 @@ export const enUS: typeof zhCN = {
     `Progress: ${scanned} / ${total}`,
   currentIp: (ip: string) => `Current IP: ${ip}`,
   aliveHosts: "Alive Hosts",
-  openPortServices: "Open Port Services",
+  openPorts: "Open Ports",
   elapsedTime: "Elapsed Time",
   totalTime: "Total Time",
   popularPorts: "Top Open Ports Distribution",

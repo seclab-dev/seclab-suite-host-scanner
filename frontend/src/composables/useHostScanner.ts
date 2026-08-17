@@ -7,6 +7,7 @@ import type {
   HostVisualState,
   NetworkInfo,
   PortScanDetail,
+  ScanProgressHostResult,
   ScanProgressUpdate,
   ScanTask,
 } from "@/types/scanner";
@@ -332,7 +333,37 @@ export function useHostScanner() {
   }
 
   /**
-   * @description 连接任务 SSE 进度流并更新当前扫描主机。
+   * @description 按主机地址合并 SSE 资产结果，保证事件回放不会生成重复报告。
+   */
+  function upsertProgressHostResult(
+    taskId: string,
+    result: ScanProgressHostResult,
+  ) {
+    const index = currentResults.value.findIndex(
+      (item) => item.host === result.host,
+    );
+    const existing = index >= 0 ? currentResults.value[index] : undefined;
+    const parsedPorts = result.ports.map((port) => ({ ...port }));
+    const hostResult: HostScanResult = {
+      id: existing?.id ?? 0,
+      task_id: taskId,
+      host: result.host,
+      status: result.status,
+      ports: JSON.stringify(parsedPorts),
+      detail: result.detail,
+      parsedPorts,
+      expanded: existing?.expanded ?? false,
+    };
+
+    if (index >= 0) {
+      currentResults.value[index] = hostResult;
+    } else {
+      currentResults.value.push(hostResult);
+    }
+  }
+
+  /**
+   * @description 连接任务 SSE 进度流并实时更新主机状态与资产报告。
    */
   function connectSse(taskId: string) {
     sse?.close();
@@ -353,6 +384,9 @@ export function useHostScanner() {
               ports: update.open_ports,
             };
           }
+        }
+        if (update.host_result) {
+          upsertProgressHostResult(update.task_id, update.host_result);
         }
         if (isTerminalTaskStatus(update.status)) {
           void completeScanFlow(taskId);
@@ -468,26 +502,34 @@ export function useHostScanner() {
     }
   }
 
+  /**
+   * @description 从按 IP 索引的实时状态计算存活主机、开放端口和端口分布。
+   */
   const stats = computed(() => {
-    const totalAlive = currentResults.value.length;
-    const withPorts = currentResults.value.filter(
-      (result) =>
-        result.parsedPorts?.some((port) => port.status === "open") ?? false,
-    ).length;
+    let totalAlive = 0;
+    let openPortCount = 0;
     const portCounts: Record<number, number> = {};
-    currentResults.value.forEach((result) => {
-      result.parsedPorts
-        ?.filter((port) => port.status === "open")
-        .forEach((port) => {
-          portCounts[port.port] = (portCounts[port.port] ?? 0) + 1;
-        });
+    Object.values(ipStates).forEach((state) => {
+      const isAlive =
+        state.status === "alive-no-port" || state.status === "alive-with-port";
+      if (!isAlive) return;
+      totalAlive += 1;
+      if (state.status !== "alive-with-port") return;
+
+      const uniqueOpenPorts = new Set(state.ports ?? []);
+      openPortCount += uniqueOpenPorts.size;
+      uniqueOpenPorts.forEach((port) => {
+        portCounts[port] = (portCounts[port] ?? 0) + 1;
+      });
     });
     return {
       totalAlive,
-      withPorts,
+      openPortCount,
       sortedPorts: Object.entries(portCounts)
         .map(([port, count]) => ({ port: Number(port), count }))
-        .sort((left, right) => right.count - left.count)
+        .sort(
+          (left, right) => right.count - left.count || left.port - right.port,
+        )
         .slice(0, 5),
     };
   });

@@ -24,6 +24,7 @@ pub struct ScanProgressUpdate {
     pub status: String,
     pub host_status: Option<String>,
     pub open_ports: Vec<u16>,
+    pub host_result: Option<ScanHostResult>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -31,6 +32,14 @@ pub struct PortScanDetail {
     pub port: u16,
     pub status: String, // "open", "refused"
     pub banner: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ScanHostResult {
+    pub host: String,
+    pub status: String,
+    pub ports: Vec<PortScanDetail>,
+    pub detail: String,
 }
 
 struct ProgressChannel {
@@ -259,6 +268,7 @@ pub fn start_background_scan(request: BackgroundScan) {
                         status: "scanning".to_string(),
                         host_status: Some("scanning".to_string()),
                         open_ports: Vec::new(),
+                        host_result: None,
                     },
                 );
 
@@ -298,6 +308,7 @@ pub fn start_background_scan(request: BackgroundScan) {
                 None => ("offline".to_string(), Vec::new()),
             };
 
+            let host_result = result.clone();
             if let Some(r) = result {
                 pending_results.push(HostScanResult {
                     id: 0,
@@ -345,6 +356,7 @@ pub fn start_background_scan(request: BackgroundScan) {
                     status: "scanning".to_string(),
                     host_status: Some(host_status),
                     open_ports,
+                    host_result,
                 },
             );
         }
@@ -401,6 +413,7 @@ pub fn start_background_scan(request: BackgroundScan) {
                 status: final_status.to_string(),
                 host_status: None,
                 open_ports: Vec::new(),
+                host_result: None,
             },
         );
 
@@ -490,25 +503,18 @@ async fn flush_scan_results(pool: &SqlitePool, results: &mut Vec<HostScanResult>
     results.clear();
 }
 
-struct TempHostResult {
-    host: String,
-    status: String,
-    ports: Vec<PortScanDetail>,
-    detail: String,
-}
-
 async fn scan_single_host(
     host: &str,
     scan_type: &str,
     ports: &[u16],
     timeout_secs: f64,
-) -> Option<TempHostResult> {
+) -> Option<ScanHostResult> {
     let timeout_dur = Duration::from_secs_f64(timeout_secs);
 
     if scan_type == "icmp" {
         let (status, detail) = ping_host(host, timeout_secs).await;
         if status == "alive" {
-            Some(TempHostResult {
+            Some(ScanHostResult {
                 host: host.to_string(),
                 status,
                 ports: Vec::new(),
@@ -555,8 +561,8 @@ async fn scan_single_host(
     }
 }
 
-/// 根据开放和拒绝端口组装可持久化的 TCP 存活主机结果。
-fn tcp_host_result(host: &str, port_results: Vec<PortScanDetail>) -> Option<TempHostResult> {
+/// 根据开放和拒绝端口组装 TCP 存活主机结果。
+fn tcp_host_result(host: &str, port_results: Vec<PortScanDetail>) -> Option<ScanHostResult> {
     let open_count = port_results
         .iter()
         .filter(|port| port.status == "open")
@@ -580,7 +586,7 @@ fn tcp_host_result(host: &str, port_results: Vec<PortScanDetail>) -> Option<Temp
             "Found {open_count} open TCP {open_port_label}; {refused_count} TCP {refused_port_label} refused the connection"
         ),
     };
-    Some(TempHostResult {
+    Some(ScanHostResult {
         host: host.to_string(),
         status: "alive".to_string(),
         ports: port_results,
@@ -721,7 +727,7 @@ async fn grab_tcp_banner(addr: SocketAddr, timeout_dur: Duration) -> Option<Stri
 
 #[cfg(test)]
 mod tests {
-    use super::{PortScanDetail, tcp_host_result};
+    use super::{PortScanDetail, ScanHostResult, ScanProgressUpdate, tcp_host_result};
 
     fn port(port: u16, status: &str) -> PortScanDetail {
         PortScanDetail {
@@ -763,5 +769,35 @@ mod tests {
     #[test]
     fn tcp_result_requires_an_open_or_refused_response() {
         assert!(tcp_host_result("192.0.2.12", Vec::new()).is_none());
+    }
+
+    #[test]
+    fn progress_update_serializes_the_complete_host_result() {
+        let update = ScanProgressUpdate {
+            task_id: "task-1".to_string(),
+            progress: 50,
+            scanned_hosts: 1,
+            total_hosts: 2,
+            current_host: "192.0.2.13".to_string(),
+            status: "scanning".to_string(),
+            host_status: Some("alive-with-port".to_string()),
+            open_ports: vec![22],
+            host_result: Some(ScanHostResult {
+                host: "192.0.2.13".to_string(),
+                status: "alive".to_string(),
+                ports: vec![PortScanDetail {
+                    port: 22,
+                    status: "open".to_string(),
+                    banner: Some("SSH-2.0-OpenSSH".to_string()),
+                }],
+                detail: "Found 1 open TCP port".to_string(),
+            }),
+        };
+
+        let json = serde_json::to_value(update).unwrap();
+        assert_eq!(json["host_result"]["host"], "192.0.2.13");
+        assert_eq!(json["host_result"]["ports"][0]["status"], "open");
+        assert_eq!(json["host_result"]["ports"][0]["banner"], "SSH-2.0-OpenSSH");
+        assert_eq!(json["host_result"]["detail"], "Found 1 open TCP port");
     }
 }

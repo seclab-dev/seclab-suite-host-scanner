@@ -264,8 +264,10 @@ function portBannerText(port: PortScanDetail) {
                 }}</span>
               </div>
               <div class="stat-card">
-                <span class="stat-label">{{ t.openPortServices }}</span>
-                <span class="stat-val text-info">{{ stats.withPorts }}</span>
+                <span class="stat-label">{{ t.openPorts }}</span>
+                <span class="stat-val text-info">{{
+                  stats.openPortCount
+                }}</span>
               </div>
               <div class="stat-card" v-if="isScanning">
                 <span class="stat-label">{{ t.elapsedTime }}</span>
