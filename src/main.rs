@@ -352,6 +352,7 @@ async fn create_scan_handler(
         progress: 0,
         total_hosts: total_hosts as i32,
         scanned_hosts: 0,
+        alive_hosts: 0,
         created_at: chrono::Local::now().to_rfc3339(),
         completed_at: None,
     };
@@ -729,6 +730,7 @@ mod tests {
             progress: 0,
             total_hosts: 254,
             scanned_hosts: 0,
+            alive_hosts: 0,
             created_at: "2026-08-04T00:00:00Z".to_string(),
             completed_at: None,
         };

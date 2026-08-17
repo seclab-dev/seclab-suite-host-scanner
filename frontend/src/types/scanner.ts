@@ -17,6 +17,7 @@ export interface ScanTask {
   progress: number;
   total_hosts: number;
   scanned_hosts: number;
+  alive_hosts: number;
   created_at: string;
   completed_at: string | null;
 }

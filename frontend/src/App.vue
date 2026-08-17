@@ -459,7 +459,7 @@ function emptyPortNotice(host: { detail: string }) {
                   <div class="history-right">
                     <span
                       class="history-stat"
-                      v-html="t.foundAliveHosts(task.scanned_hosts)"
+                      v-html="t.foundAliveHosts(task.alive_hosts)"
                     ></span>
                     <SecLabButton
                       type="danger"
